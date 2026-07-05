@@ -1,3 +1,20 @@
+# 1. MAKE SURE SEND_FILE IS INCLUDED AT THE VERY TOP
+from flask import Flask, jsonify, send_file
+
+app = Flask(__name__)
+
+# ... (Keep all your existing weather and lift functions exactly the same) ...
+
+# 2. ADD THIS NEW ROUTE TO SERVE THE IMAGE
+@app.route("/logo.svg")
+def serve_logo():
+    return send_file("image_454c6a.svg", mimetype="image/png")
+
+# 3. YOUR EXISTING MAIN ROUTE KEEPS RUNNING BELOW IT
+@app.route("/")
+def handle_endpoint():
+    # ... (Keep your existing endpoint code here) ...
+
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify
@@ -10,12 +27,6 @@ LON = 8.5980
 
 import requests
 from flask import Flask, jsonify
-
-app = Flask(__name__)
-
-@app.route("/logo.svg")
-def serve_logo():
-    return send_file("image_454c6a.svg", mimetype="image/svg")
 
 app = Flask(__name__)
 
