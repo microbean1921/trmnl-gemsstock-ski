@@ -8,23 +8,30 @@ LAT = 46.6358
 LON = 8.5980
 
 def get_mountain_weather():
-    url_base = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&elevation=1444&current=temperature_2m,weather_code&timezone=Europe/Zurich"
-    
-    # Expanded to request future maximum/minimum daily temperatures and weather conditions
-    url_peak = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&elevation=2961&current=temperature_2m,snow_depth&daily=snowfall_sum,weather_code,temperature_2m_max,temperature_2m_min&timezone=Europe/Zurich"
+    # A single bulletproof query fetching local current, hourly, and daily metrics
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,weather_code&hourly=snow_depth&daily=snowfall_sum,weather_code,temperature_2m_max,temperature_2m_min&timezone=Europe/Zurich"
     
     try:
-        r_base = requests.get(url_base).json()
-        r_peak = requests.get(url_peak).json()
+        r = requests.get(url).json()
+        current = r.get("current", {})
+        daily = r.get("daily", {})
+        hourly = r.get("hourly", {})
         
-        c_base = r_base.get("current", {})
-        c_peak = r_peak.get("current", {})
-        daily = r_peak.get("daily", {})
+        # 1. Base floor temperature directly from open-meteo
+        base_temp = round(current.get("temperature_2m", 0))
         
-        code = c_base.get("weather_code", 0)
+        # 2. Peak temperature dynamically scaled using the mountain lapse rate (-10°C)
+        peak_temp = base_temp - 10
+        
+        code = current.get("weather_code", 0)
         condition = "Clear" if code == 0 else "Cloudy" if code in [1,2,3] else "Snowing" if code in [71,73,75,85,86] else "Mixed"
         
-        # Parse out the rolling 3-day future forecast (skipping index 0 which is today)
+        # Extract snow values cleanly from working arrays
+        snow_depth_list = hourly.get("snow_depth", [0])
+        snow_depth_cm = round(snow_depth_list[0] * 100) if snow_depth_list else 0
+        new_snow_cm = round(daily.get("snowfall_sum", [0])[0])
+        
+        # 3. Build the 3-day future lookahead with high-alpine scaling adjustments
         forecast_list = []
         f_times = daily.get("time", [])
         f_codes = daily.get("weather_code", [])
@@ -34,24 +41,28 @@ def get_mountain_weather():
         for i in range(1, 4):
             if i < len(f_times):
                 day_dt = datetime.datetime.strptime(f_times[i], "%Y-%m-%d")
-                day_name = day_dt.strftime("%a") # Returns "Mon", "Tue", etc.
+                day_name = day_dt.strftime("%a")
                 
                 f_code = f_codes[i] if i < len(f_codes) else 0
                 f_cond = "Clear" if f_code == 0 else "Cloudy" if f_code in [1,2,3] else "Snow" if f_code in [71,73,75,85,86] else "Rain"
                 
+                # Apply high alpine summit lapse rate offsets to future days (-10°C)
+                day_max = round(f_maxes[i]) - 10 if i < len(f_maxes) else 0
+                day_min = round(f_mins[i]) - 10 if i < len(f_mins) else 0
+                
                 forecast_list.append({
                     "day": day_name,
-                    "max": round(f_maxes[i]) if i < len(f_maxes) else "--",
-                    "min": round(f_mins[i]) if i < len(f_mins) else "--",
+                    "max": day_max,
+                    "min": day_min,
                     "condition": f_cond
                 })
         
         return {
-            "base_temp": round(c_base.get("temperature_2m", 0)),
-            "peak_temp": round(c_peak.get("temperature_2m", 0)),
+            "base_temp": base_temp,
+            "peak_temp": peak_temp,
             "condition": condition,
-            "snow_depth_cm": round(c_peak.get("snow_depth", 0) * 100),
-            "new_snow_cm": round(daily.get("snowfall_sum", [0])[0]),
+            "snow_depth_cm": snow_depth_cm,
+            "new_snow_cm": new_snow_cm,
             "forecast": forecast_list
         }
     except Exception:
