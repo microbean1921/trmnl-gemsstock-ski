@@ -8,6 +8,14 @@ app = Flask(__name__)
 LAT = 46.6358
 LON = 8.5980
 
+import requests
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+LAT = 46.6358
+LON = 8.5980
+
 def get_mountain_weather():
     url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,weather_code,snow_depth&daily=snowfall_sum&timezone=Europe/Zurich"
     try:
@@ -28,7 +36,8 @@ def get_mountain_weather():
         return {"temp": "--", "condition": "Unknown", "snow_depth_cm": "--", "new_snow_cm": "0"}
 
 def get_gemsstock_lifts():
-    url = "https://snow.myswitzerland.com/snow_reports/andermatt-oberalp-sedrun-111/"
+    # Switching to the dedicated official live summary page
+    url = "https://live.andermatt-sedrun-disentis.ch/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
     target_lifts = [
@@ -42,14 +51,24 @@ def get_gemsstock_lifts():
     lifts_status = []
     try:
         response = requests.get(url, headers=headers)
-        page_text = response.text.lower()
+        # Split the text by lines to isolate data blocks
+        lines = response.text.split('\n')
         
         for lift in target_lifts:
             status = "Closed"
-            if lift.lower() in page_text:
-                # Basic scraper fallback mechanism
-                if "open" in page_text or "in betrieb" in page_text:
-                    status = "Open"
+            
+            # Find the specific line that mentions our lift
+            for line in lines:
+                if lift.lower() in line.lower():
+                    # Now we check for runtime status indicators *only* on this line
+                    # In the off-season, it lists operating hours as "00:00" or notes it's closed
+                    if "00:00" in line or "closed" in line.lower() or "nicht in betrieb" in line.lower():
+                        status = "Closed"
+                    elif "open" in line.lower() or "betrieb ab" in line.lower() or "in betrieb" in line.lower():
+                        # Double-check it's not zeroed out operational hours
+                        if "00:00" not in line:
+                            status = "Open"
+                            
             lifts_status.append({"name": lift, "status": status})
             
     except Exception:
@@ -58,7 +77,6 @@ def get_gemsstock_lifts():
             
     return lifts_status
 
-# Changed to the root path '/' for simple Vercel mapping
 @app.route("/")
 def handle_endpoint():
     weather_data = get_mountain_weather()
