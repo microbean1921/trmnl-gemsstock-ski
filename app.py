@@ -13,6 +13,12 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
+@app.route("/logo.svg")
+def serve_logo():
+    return send_file("image_454c6a.svg", mimetype="image/svg")
+
+app = Flask(__name__)
+
 LAT = 46.6358
 LON = 8.5980
 
