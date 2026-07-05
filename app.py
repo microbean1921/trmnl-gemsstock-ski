@@ -1,63 +1,78 @@
-<div class="layout" style="padding: 15px; height: 100%;">
-  
-  <!-- ROW 1: HEADER & RESORT OVERVIEW -->
-  <div class="columns border--bottom padding-bottom--1">
-    <div class="column" style="width: 60%;">
-      <span class="title font--xlarge" data-pixel-perfect="true">GEMSSTOCK</span>
-      <span class="description font--medium" style="margin-top: 2px;">Andermatt High Alpine Peak</span>
-    </div>
-    <div class="column text--right" style="width: 40%;">
-      <span class="value font--xlarge">{{ summary.open }}/{{ summary.total }}</span>
-      <span class="label">Lifts Running</span>
-    </div>
-  </div>
+import requests
+from bs4 import BeautifulSoup
+from flask import Flask, jsonify
 
-  <!-- ROW 2: CONDITIONS DASHBOARD METRICS -->
-  <div class="columns padding-vertical--2 border--bottom bg--grey-light" style="margin-top: 10px; border-radius: 4px;">
-    <div class="column text--center" style="width: 33%;">
-      <span class="label block">Air Temp</span>
-      <span class="value font--large">{{ weather.temp }}°C</span>
-      <span class="description font--small">{{ weather.condition }}</span>
-    </div>
-    <div class="column text--center style="width: 33%; border-left: 1px solid #000; border-right: 1px solid #000;">
-      <span class="label block">Fresh Snow</span>
-      <span class="value font--large">+{{ weather.new_snow_cm }} cm</span>
-      <span class="description font--small">Past 24 Hours</span>
-    </div>
-    <div class="column text--center" style="width: 33%;">
-      <span class="label block">Base Depth</span>
-      <span class="value font--large">{{ weather.snow_depth_cm }} cm</span>
-      <span class="description font--small">Summit Station</span>
-    </div>
-  </div>
+# CRITICAL: This must be completely unindented against the left wall
+app = Flask(__name__)
 
-  <!-- ROW 3: EXPLODED LIFT LIST MATRIX -->
-  <div class="padding-top--2" style="margin-top: 5px;">
-    <span class="label font--medium block padding-bottom--1" style="text-transform: uppercase; letter-spacing: 1px;">Installation Status</span>
+LAT = 46.6358
+LON = 8.5980
+
+def get_mountain_weather():
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}&current=temperature_2m,weather_code,snow_depth&daily=snowfall_sum&timezone=Europe/Zurich"
+    try:
+        r = requests.get(url).json()
+        current = r.get("current", {})
+        daily = r.get("daily", {})
+        
+        code = current.get("weather_code", 0)
+        condition = "Clear" if code == 0 else "Cloudy" if code in [1,2,3] else "Snowing" if code in [71,73,75,85,86] else "Mixed"
+        
+        return {
+            "temp": round(current.get("temperature_2m", 0)),
+            "condition": condition,
+            "snow_depth_cm": round(current.get("snow_depth", 0) * 100),
+            "new_snow_cm": round(daily.get("snowfall_sum", [0])[0])
+        }
+    except Exception:
+        return {"temp": "--", "condition": "Unknown", "snow_depth_cm": "--", "new_snow_cm": "0"}
+
+def get_gemsstock_lifts():
+    url = "https://snow.myswitzerland.com/snow_reports/andermatt-oberalp-sedrun-111/"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
-    <div class="columns flex-wrap">
-      {% for lift in lifts %}
-      <div class="column" style="width: 50%; padding-bottom: 8px;">
-        <div class="item style="padding-right: 15px;">
-          <div class="meta">
-            <!-- Keeps typography perfectly balanced -->
-            <span class="title font--small" style="font-weight: bold;">{{ lift.name }}</span>
-          </div>
-          <div class="content text--right">
-            {% if lift.status == 'Open' %}
-              <span class="tag tag--black">OPEN</span>
-            {% else %}
-              <span class="tag tag--light" style="border: 1px solid #000;">CLOSED</span>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
+    target_lifts = [
+        "Gemsstock-Bahn", 
+        "Gurschen-Bahn", 
+        "Gurschen-Flyer", 
+        "Lutersee-Lift", 
+        "Gletscherchele"
+    ]
+    
+    lifts_status = []
+    try:
+        response = requests.get(url, headers=headers)
+        page_text = response.text.lower()
+        
+        for lift in target_lifts:
+            status = "Closed"
+            if lift.lower() in page_text:
+                # Basic scraper fallback mechanism
+                if "open" in page_text or "in betrieb" in page_text:
+                    status = "Open"
+            lifts_status.append({"name": lift, "status": status})
+            
+    except Exception:
+        for lift in target_lifts:
+            lifts_status.append({"name": lift, "status": "Offline"})
+            
+    return lifts_status
 
-  <!-- TIMESTAMPS FOOTER -->
-  <div class="title_bar" style="position: absolute; bottom: 10px; width: 95%;">
-    <span class="title_bar__text">TRMNL X Alpine Feed • Sync: {{ "now" | date: "%H:%M" }}</span>
-  </div>
-</div>
+# Changed to the root path '/' for simple Vercel mapping
+@app.route("/")
+def handle_endpoint():
+    weather_data = get_mountain_weather()
+    lifts_data = get_gemsstock_lifts()
+    open_count = sum(1 for l in lifts_data if l["status"] == "Open")
+    
+    return jsonify({
+        "weather": weather_data,
+        "lifts": lifts_data,
+        "summary": {
+            "open": open_count,
+            "total": len(lifts_data)
+        }
+    })
+
+# We remove the traditional app.run() block because Vercel handles 
+# execution via its own built-in serverless wrapper.
