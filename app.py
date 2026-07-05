@@ -45,8 +45,7 @@ def get_gemsstock_lifts():
         "Gemsstock-Bahn", 
         "Gurschen-Bahn", 
         "Gurschen-Flyer", 
-        "Lutersee-Lift", 
-        "Gletscherchele"
+        "Lutersee-Lift"
     ]
     
     lifts_status = []
