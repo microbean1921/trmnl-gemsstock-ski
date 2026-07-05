@@ -6,7 +6,7 @@ app = Flask(__name__)
 # ... (Keep all your existing weather and lift functions exactly the same) ...
 
 # 2. ADD THIS NEW ROUTE TO SERVE THE IMAGE
-@app.route("/logo.svg")
+@app.route("/logo.png")
 def serve_logo():
     return send_file("image_454c6a.svg", mimetype="image/png")
 
