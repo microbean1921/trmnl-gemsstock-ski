@@ -33,7 +33,6 @@ def get_mountain_weather():
         code = current.get("weather_code", 0)
         condition = "Clear" if code == 0 else "Cloudy" if code in [1,2,3] else "Snowing" if code in [71,73,75,85,86] else "Mixed"
         
-        # Match snow depth to the current hour if available
         snow_depth_list = hourly.get("snow_depth", [])
         hourly_times = hourly.get("time", [])
         current_hour_prefix = current.get("time", "")[:13]
@@ -89,23 +88,32 @@ def get_gemsstock_lifts():
 
 @app.route("/debug")
 def debug_scrape():
-    url = "https://live.andermatt-sedrun-disentis.ch/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    r = requests.get(url, headers=headers, timeout=10)
-    html = r.text
+    out = {}
 
-    links = re.findall(r'href=["\']([^"\']+)["\']', html, re.IGNORECASE)
-    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
-    api_hints = []
-    for s in scripts:
-        for match in re.findall(r'["\']((?:https?://|/)[^"\'\s]+)["\']', s):
-            api_hints.append(match)
+    try:
+        r1 = requests.get("https://prodmediacenter.blob.core.windows.net/a005/ledwall/areaview.html", headers=headers, timeout=10)
+        urls = re.findall(r'["\']([^"\']*(?:json|api|data|siscontrol|blob)[^"\']*)["\']', r1.text, re.IGNORECASE)
+        scripts = re.findall(r'<script[^>]*>(.*?)</script>', r1.text, re.DOTALL | re.IGNORECASE)
+        out["areaview_urls"] = sorted(list(set(urls)))
+        out["areaview_script"] = "\n".join(s.strip() for s in scripts if s.strip())[:1500]
+    except Exception as e:
+        out["areaview_error"] = str(e)
 
-    return jsonify({
-        "links": sorted(list(set(links))),
-        "script_urls": sorted(list(set(api_hints))),
-        "inline_scripts_sample": [s.strip()[:600] for s in scripts if s.strip()][:5]
-    })
+    try:
+        r2 = requests.get("https://www.siscontrol.ch/a005/sismap/andermatt/0", params={"season": "1", "x": "0"}, headers=headers, timeout=10)
+        html_lower = r2.text.lower()
+        samples = {}
+        for term in ["gemsstock", "gurschen", "lutersee"]:
+            idx = html_lower.find(term)
+            if idx != -1:
+                samples[term] = r2.text[max(0, idx - 200):idx + 500]
+        out["sis_status"] = r2.status_code
+        out["sis_samples"] = samples
+    except Exception as e:
+        out["sis_error"] = str(e)
+
+    return jsonify(out)
 
 @app.route("/logo.svg")
 def serve_logo():
