@@ -7,6 +7,7 @@ app = Flask(__name__)
 
 LAT = 46.6358
 LON = 8.5980
+SIS_FEED_URL = "https://export.siscontrol.ch/sismedia/json/8927FB40-50DA-4BAF-B085-EDCFE671BCFA"
 
 def get_mountain_weather():
     params = {
@@ -82,40 +83,82 @@ def get_mountain_weather():
     except Exception:
         return {"base_temp": "--", "peak_temp": "--", "condition": "Unknown", "snow_depth_cm": "--", "new_snow_cm": "0", "forecast": []}
 
+def _collect_items(node, found):
+    if isinstance(node, dict):
+        node_id = node.get("id")
+        if node_id in [261, 262, 263, 264]:
+            found[node_id] = node
+        for v in node.values():
+            _collect_items(v, found)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_items(item, found)
+
+def _parse_status(item):
+    if not item:
+        return "Closed"
+    raw = None
+    for key in ["status", "state", "statusId", "stateId", "operationStatus", "isOpen", "open"]:
+        if key in item and item[key] is not None:
+            raw = item[key]
+            break
+    if isinstance(raw, dict):
+        raw = raw.get("id") or raw.get("code") or raw.get("status") or raw.get("name")
+    if isinstance(raw, str):
+        raw_clean = raw.strip().lower()
+        return "Open" if raw_clean in ["1", "open", "opened", "true", "geöffnet", "in betrieb"] else "Closed"
+    return "Open" if raw in [1, True] else "Closed"
+
 def get_gemsstock_lifts():
-    target_lifts = ["Gemsstock-Bahn", "Gurschen-Bahn", "Gurschen-Flyer", "Lutersee-Lift"]
-    return [{"name": lift, "status": "Closed"} for lift in target_lifts]
+    id_map = [
+        (262, "Gemsstock-Bahn"),
+        (261, "Gurschen-Bahn"),
+        (263, "Gurschen-Flyer"),
+        (264, "Lutersee-Lift")
+    ]
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        data = requests.get(SIS_FEED_URL, headers=headers, timeout=10).json()
+        found = {}
+        _collect_items(data, found)
+
+        # Match by lift name if IDs are ordered differently in SIS Control
+        name_to_status = {}
+        for item in found.values():
+            label = str(item.get("name") or item.get("title") or item.get("label") or "").lower()
+            st = _parse_status(item)
+            if "gemsstock" in label:
+                name_to_status["Gemsstock-Bahn"] = st
+            elif "flyer" in label:
+                name_to_status["Gurschen-Flyer"] = st
+            elif "gurschen" in label:
+                name_to_status["Gurschen-Bahn"] = st
+            elif "lutersee" in label:
+                name_to_status["Lutersee-Lift"] = st
+
+        result = []
+        for lift_id, display_name in id_map:
+            if display_name in name_to_status:
+                status = name_to_status[display_name]
+            else:
+                status = _parse_status(found.get(lift_id))
+            result.append({"name": display_name, "status": status})
+        return result
+    except Exception:
+        return [{"name": name, "status": "Offline"} for _, name in id_map]
 
 @app.route("/debug")
 def debug_scrape():
-    base = "https://prodmediacenter.blob.core.windows.net/a005/ledwall/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    all_js = [
-        "MediaCenterAndermatt.2638f920.js",
-        "MediaCenterAndermatt.3bd34278.js",
-        "MediaCenterAndermatt.977eadd3.js",
-        "MediaCenterAndermatt.9a9ac6d5.js",
-        "areaview.f62060a4.js",
-        "areaview.fafa871a.js"
-    ]
-    out = {}
-
-    for js in all_js:
-        try:
-            text = requests.get(base + js, headers=headers, timeout=10).text
-            matches = []
-            for kw in ['"PStwO":', "PStwO:[", "api.siscontrol", "export.siscontrol", "updater.service"]:
-                for m in re.finditer(re.escape(kw), text):
-                    matches.append({
-                        "keyword": kw,
-                        "code": text[max(0, m.start() - 100):min(len(text), m.end() + 900)]
-                    })
-            if matches:
-                out[js] = matches
-        except Exception as e:
-            out[js] = str(e)
-
-    return jsonify(out)
+    r = requests.get(SIS_FEED_URL, headers=headers, timeout=10)
+    data = r.json()
+    found = {}
+    _collect_items(data, found)
+    return jsonify({
+        "status_code": r.status_code,
+        "top_level_keys": list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+        "gemsstock_lift_objects": found
+    })
 
 @app.route("/logo.svg")
 def serve_logo():
