@@ -92,25 +92,21 @@ def debug_scrape():
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     out = {}
 
-    for fname in ["areas.json", "locations.json"]:
-        try:
-            res = requests.get(base + fname, headers=headers, timeout=10)
-            out[fname] = res.json() if res.status_code == 200 else res.status_code
-        except Exception as e:
-            out[fname] = str(e)
-
-    js_snippets = []
     for js in ["areaview.f62060a4.js", "areaview.fafa871a.js", "MediaCenterAndermatt.2638f920.js", "MediaCenterAndermatt.977eadd3.js"]:
         try:
             text = requests.get(base + js, headers=headers, timeout=10).text
-            for kw in ["api.siscontrol.ch", "export.siscontrol.ch", "areas.json", "locations.json"]:
+            matches = []
+            for kw in ["PStwO", "siscontrol", "a005", "liftIds", "261"]:
                 for m in re.finditer(re.escape(kw), text):
-                    snippet = text[max(0, m.start() - 150):min(len(text), m.end() + 350)]
-                    js_snippets.append({"file": js, "keyword": kw, "code": snippet})
+                    matches.append({
+                        "keyword": kw,
+                        "code": text[max(0, m.start() - 100):min(len(text), m.end() + 500)]
+                    })
+            if matches:
+                out[js] = matches[:8]
         except Exception as e:
-            js_snippets.append({"file": js, "error": str(e)})
+            out[js] = str(e)
 
-    out["js_snippets"] = js_snippets
     return jsonify(out)
 
 @app.route("/logo.svg")
