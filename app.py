@@ -9,10 +9,20 @@ LAT = 46.6358
 LON = 8.5980
 
 def get_mountain_weather():
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}¤t=temperature_2m,weather_code&hourly=snow_depth&daily=snowfall_sum,weather_code,temperature_2m_max,temperature_2m_min&timezone=Europe/Zurich"
+    params = {
+        "latitude": LAT,
+        "longitude": LON,
+        "current": "temperature_2m,weather_code",
+        "hourly": "snow_depth",
+        "daily": "snowfall_sum,weather_code,temperature_2m_max,temperature_2m_min",
+        "timezone": "Europe/Zurich"
+    }
     
     try:
-        r = requests.get(url, timeout=10).json()
+        r = requests.get("https://api.open-meteo.com/v1/forecast", params=params, timeout=10).json()
+        if r.get("error"):
+            raise ValueError(r.get("reason", "Open-Meteo API error"))
+
         current = r.get("current", {})
         daily = r.get("daily", {})
         hourly = r.get("hourly", {})
@@ -23,9 +33,20 @@ def get_mountain_weather():
         code = current.get("weather_code", 0)
         condition = "Clear" if code == 0 else "Cloudy" if code in [1,2,3] else "Snowing" if code in [71,73,75,85,86] else "Mixed"
         
-        snow_depth_list = hourly.get("snow_depth", [0])
-        snow_depth_cm = round(snow_depth_list[0] * 100) if snow_depth_list else 0
-        new_snow_cm = round(daily.get("snowfall_sum", [0])[0])
+        # Match snow depth to the current hour if available
+        snow_depth_list = hourly.get("snow_depth", [])
+        hourly_times = hourly.get("time", [])
+        current_hour_prefix = current.get("time", "")[:13]
+        depth_m = 0
+        for idx, t in enumerate(hourly_times):
+            if t.startswith(current_hour_prefix) and idx < len(snow_depth_list):
+                depth_m = snow_depth_list[idx] or 0
+                break
+        if not depth_m and snow_depth_list:
+            depth_m = snow_depth_list[0] or 0
+
+        snow_depth_cm = round(depth_m * 100)
+        new_snow_cm = round(daily.get("snowfall_sum", [0])[0] or 0)
         
         forecast_list = []
         f_times = daily.get("time", [])
@@ -63,74 +84,27 @@ def get_mountain_weather():
         return {"base_temp": "--", "peak_temp": "--", "condition": "Unknown", "snow_depth_cm": "--", "new_snow_cm": "0", "forecast": []}
 
 def get_gemsstock_lifts():
-    url = "https://live.andermatt-sedrun-disentis.ch/"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    
-    # Map dashboard display names to flexible regex patterns (handles hyphen/no-hyphen variants)
-    target_lifts = [
-        ("Gemsstock-Bahn", r"gemsstock[- ]?bahn"),
-        ("Gurschen-Bahn", r"gurschen[- ]?bahn"),
-        ("Gurschen-Flyer", r"gurschen[- ]?flyer"),
-        ("Lutersee-Lift", r"lutersee([- ]?lift)?")
-    ]
-    
-    open_indicators = [
-        "in betrieb", "geöffnet", "offen", '"open"', "'open'",
-        "status-open", "state-open", "is-open", "betrieb ab"
-    ]
-    closed_indicators = [
-        "nicht in betrieb", "geschlossen", '"closed"', "'closed'",
-        "status-closed", "state-closed", "00:00 - 00:00", "00:00-00:00"
-    ]
-    
-    lifts_status = []
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        html = response.text
-        
-        for display_name, pattern in target_lifts:
-            status = "Closed"
-            for match in re.finditer(pattern, html, re.IGNORECASE):
-                start = max(0, match.start() - 100)
-                end = min(len(html), match.end() + 450)
-                snippet = html[start:end].lower()
-                
-                is_closed = any(ind in snippet for ind in closed_indicators)
-                has_hours = bool(re.search(r"\b0[789]:\d{2}\s*-\s*1[567]:\d{2}\b", snippet))
-                is_open = any(ind in snippet for ind in open_indicators) or has_hours
-                
-                if is_open and not is_closed:
-                    status = "Open"
-                    break
-                    
-            lifts_status.append({"name": display_name, "status": status})
-    except Exception:
-        for display_name, _ in target_lifts:
-            lifts_status.append({"name": display_name, "status": "Offline"})
-            
-    return lifts_status
+    target_lifts = ["Gemsstock-Bahn", "Gurschen-Bahn", "Gurschen-Flyer", "Lutersee-Lift"]
+    return [{"name": lift, "status": "Closed"} for lift in target_lifts]
 
 @app.route("/debug")
 def debug_scrape():
     url = "https://live.andermatt-sedrun-disentis.ch/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     r = requests.get(url, headers=headers, timeout=10)
-    html_lower = r.text.lower()
+    html = r.text
 
-    samples = {}
-    for term in ["gurschen", "lutersee", "gemsstock-bahn", "gemsstockbahn"]:
-        idx = html_lower.find(term)
-        if idx != -1:
-            samples[term] = r.text[max(0, idx - 250):idx + 600]
-
-    meteo_url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}¤t=temperature_2m&timezone=Europe/Zurich"
-    m_res = requests.get(meteo_url, timeout=10)
+    links = re.findall(r'href=["\']([^"\']+)["\']', html, re.IGNORECASE)
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL | re.IGNORECASE)
+    api_hints = []
+    for s in scripts:
+        for match in re.findall(r'["\']((?:https?://|/)[^"\'\s]+)["\']', s):
+            api_hints.append(match)
 
     return jsonify({
-        "lift_samples_found": list(samples.keys()),
-        "samples": samples,
-        "open_meteo_status": m_res.status_code,
-        "open_meteo_raw": m_res.json()
+        "links": sorted(list(set(links))),
+        "script_urls": sorted(list(set(api_hints))),
+        "inline_scripts_sample": [s.strip()[:600] for s in scripts if s.strip()][:5]
     })
 
 @app.route("/logo.svg")
