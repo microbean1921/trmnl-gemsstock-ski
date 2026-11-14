@@ -90,20 +90,28 @@ def get_gemsstock_lifts():
 def debug_scrape():
     base = "https://prodmediacenter.blob.core.windows.net/a005/ledwall/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    all_js = [
+        "MediaCenterAndermatt.2638f920.js",
+        "MediaCenterAndermatt.3bd34278.js",
+        "MediaCenterAndermatt.977eadd3.js",
+        "MediaCenterAndermatt.9a9ac6d5.js",
+        "areaview.f62060a4.js",
+        "areaview.fafa871a.js"
+    ]
     out = {}
 
-    for js in ["areaview.f62060a4.js", "areaview.fafa871a.js", "MediaCenterAndermatt.2638f920.js", "MediaCenterAndermatt.977eadd3.js"]:
+    for js in all_js:
         try:
             text = requests.get(base + js, headers=headers, timeout=10).text
             matches = []
-            for kw in ["PStwO", "siscontrol", "a005", "liftIds", "261"]:
+            for kw in ['"PStwO":', "PStwO:[", "api.siscontrol", "export.siscontrol", "updater.service"]:
                 for m in re.finditer(re.escape(kw), text):
                     matches.append({
                         "keyword": kw,
-                        "code": text[max(0, m.start() - 100):min(len(text), m.end() + 500)]
+                        "code": text[max(0, m.start() - 100):min(len(text), m.end() + 900)]
                     })
             if matches:
-                out[js] = matches[:8]
+                out[js] = matches
         except Exception as e:
             out[js] = str(e)
 
