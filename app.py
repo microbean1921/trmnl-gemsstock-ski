@@ -90,27 +90,28 @@ def get_gemsstock_lifts():
 def debug_scrape():
     base = "https://prodmediacenter.blob.core.windows.net/a005/ledwall/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    r = requests.get(base + "areaview.html", headers=headers, timeout=10)
-    js_files = sorted(list(set(re.findall(r'src=["\']([^"\']+\.js)["\']', r.text, re.IGNORECASE))))
+    out = {}
 
-    found_urls = []
-    json_refs = []
-    for js in js_files:
+    for fname in ["areas.json", "locations.json"]:
         try:
-            jr = requests.get(base + js, headers=headers, timeout=10)
-            for m in re.findall(r'https?://[^"\'\s\)\]]+', jr.text):
-                if not any(skip in m for skip in ["w3.org", "reactjs.org", "fb.me", "github.com", "mozilla.org"]):
-                    found_urls.append(m)
-            for m in re.findall(r'["\']([^"\'\s]+\.json[^"\'\s]*)["\']', jr.text):
-                json_refs.append(m)
+            res = requests.get(base + fname, headers=headers, timeout=10)
+            out[fname] = res.json() if res.status_code == 200 else res.status_code
         except Exception as e:
-            found_urls.append(f"ERROR {js}: {e}")
+            out[fname] = str(e)
 
-    return jsonify({
-        "js_files": js_files,
-        "found_urls": sorted(list(set(found_urls))),
-        "json_refs": sorted(list(set(json_refs)))
-    })
+    js_snippets = []
+    for js in ["areaview.f62060a4.js", "areaview.fafa871a.js", "MediaCenterAndermatt.2638f920.js", "MediaCenterAndermatt.977eadd3.js"]:
+        try:
+            text = requests.get(base + js, headers=headers, timeout=10).text
+            for kw in ["api.siscontrol.ch", "export.siscontrol.ch", "areas.json", "locations.json"]:
+                for m in re.finditer(re.escape(kw), text):
+                    snippet = text[max(0, m.start() - 150):min(len(text), m.end() + 350)]
+                    js_snippets.append({"file": js, "keyword": kw, "code": snippet})
+        except Exception as e:
+            js_snippets.append({"file": js, "error": str(e)})
+
+    out["js_snippets"] = js_snippets
+    return jsonify(out)
 
 @app.route("/logo.svg")
 def serve_logo():
