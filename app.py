@@ -83,8 +83,45 @@ def get_mountain_weather():
         return {"base_temp": "--", "peak_temp": "--", "condition": "Unknown", "snow_depth_cm": "--", "new_snow_cm": "0", "forecast": []}
 
 def get_gemsstock_lifts():
-    target_lifts = ["Gemsstock-Bahn", "Gurschen-Bahn", "Gurschen-Flyer", "Lutersee-Lift"]
-    return [{"name": lift, "status": "Closed"} for lift in target_lifts]
+    url = "https://www.andermatt-sedrun-disentis.ch/de/stories/betriebszeiten"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    
+    target_lifts = [
+        ("Gemsstock-Bahn", r"gemsstock[- ]?bahn"),
+        ("Gurschen-Bahn", r"gurschen[- ]?bahn"),
+        ("Gurschen-Flyer", r"gurschen[- ]?flyer"),
+        ("Lutersee-Lift", r"lutersee([- ]?lift)?")
+    ]
+    
+    open_tokens = [
+        "geöffnet", "in betrieb", "offen", '"open"', "'open'",
+        '"isopen":true', '"status":"open"', '"state":1', '"status":1', "status-open"
+    ]
+    closed_tokens = [
+        "geschlossen", "nicht in betrieb", '"closed"', "'closed'",
+        '"isopen":false', '"status":"closed"', '"state":0', '"status":0', "status-closed"
+    ]
+    
+    lifts_status = []
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        html = r.text
+        
+        for display_name, pattern in target_lifts:
+            status = "Closed"
+            for match in re.finditer(pattern, html, re.IGNORECASE):
+                snippet = html[max(0, match.start() - 150):min(len(html), match.end() + 400)].lower()
+                is_closed = any(tok in snippet for tok in closed_tokens)
+                is_open = any(tok in snippet for tok in open_tokens)
+                if is_open and not is_closed:
+                    status = "Open"
+                    break
+            lifts_status.append({"name": display_name, "status": status})
+    except Exception:
+        for display_name, _ in target_lifts:
+            lifts_status.append({"name": display_name, "status": "Offline"})
+            
+    return lifts_status
 
 @app.route("/debug")
 def debug_scrape():
@@ -92,26 +129,26 @@ def debug_scrape():
     out = {}
 
     try:
-        r1 = requests.get("https://prodmediacenter.blob.core.windows.net/a005/ledwall/areaview.html", headers=headers, timeout=10)
-        urls = re.findall(r'["\']([^"\']*(?:json|api|data|siscontrol|blob)[^"\']*)["\']', r1.text, re.IGNORECASE)
-        scripts = re.findall(r'<script[^>]*>(.*?)</script>', r1.text, re.DOTALL | re.IGNORECASE)
-        out["areaview_urls"] = sorted(list(set(urls)))
-        out["areaview_script"] = "\n".join(s.strip() for s in scripts if s.strip())[:1500]
-    except Exception as e:
-        out["areaview_error"] = str(e)
-
-    try:
-        r2 = requests.get("https://www.siscontrol.ch/a005/sismap/andermatt/0", params={"season": "1", "x": "0"}, headers=headers, timeout=10)
-        html_lower = r2.text.lower()
+        r1 = requests.get("https://www.andermatt-sedrun-disentis.ch/de/stories/betriebszeiten", headers=headers, timeout=10)
+        html_lower = r1.text.lower()
         samples = {}
-        for term in ["gemsstock", "gurschen", "lutersee"]:
+        for term in ["gurschen", "gemsstock-bahn", "gemsstockbahn", "lutersee", "siscontrol"]:
             idx = html_lower.find(term)
             if idx != -1:
-                samples[term] = r2.text[max(0, idx - 200):idx + 500]
-        out["sis_status"] = r2.status_code
-        out["sis_samples"] = samples
+                samples[term] = r1.text[max(0, idx - 200):idx + 500]
+        out["betriebszeiten_status"] = r1.status_code
+        out["betriebszeiten_found"] = list(samples.keys())
+        out["betriebszeiten_samples"] = samples
     except Exception as e:
-        out["sis_error"] = str(e)
+        out["betriebszeiten_error"] = str(e)
+
+    try:
+        r2 = requests.get("https://prodmediacenter.blob.core.windows.net/a005/ledwall/areaview.html", headers=headers, timeout=10)
+        src_urls = re.findall(r'src=["\']([^"\']+)["\']', r2.text, re.IGNORECASE)
+        out["areaview_raw_html"] = r2.text[:1500]
+        out["areaview_src_urls"] = src_urls
+    except Exception as e:
+        out["areaview_error"] = str(e)
 
     return jsonify(out)
 
