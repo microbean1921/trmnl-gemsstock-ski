@@ -1,4 +1,3 @@
-import re
 import requests
 import datetime
 from flask import Flask, jsonify, send_file
@@ -86,7 +85,7 @@ def get_mountain_weather():
 def _collect_items(node, found):
     if isinstance(node, dict):
         node_id = node.get("id")
-        if node_id in [261, 262, 263, 264]:
+        if node_id in [261, 262, 263, 264] and "status" in node:
             found[node_id] = node
         for v in node.values():
             _collect_items(v, found)
@@ -94,23 +93,20 @@ def _collect_items(node, found):
         for item in node:
             _collect_items(item, found)
 
-def _parse_status(item):
-    if not item:
-        return "Closed"
-    raw = None
-    for key in ["status", "state", "statusId", "stateId", "operationStatus", "isOpen", "open"]:
-        if key in item and item[key] is not None:
-            raw = item[key]
-            break
-    if isinstance(raw, dict):
-        raw = raw.get("id") or raw.get("code") or raw.get("status") or raw.get("name")
-    if isinstance(raw, str):
-        raw_clean = raw.strip().lower()
-        return "Open" if raw_clean in ["1", "open", "opened", "true", "geöffnet", "in betrieb"] else "Closed"
-    return "Open" if raw in [1, True] else "Closed"
+def _is_status_open(status_code, status_types):
+    if isinstance(status_types, list):
+        for st in status_types:
+            if isinstance(st, dict) and st.get("id") == status_code:
+                name_obj = st.get("name", {})
+                label = " ".join(str(v) for v in name_obj.values()).lower() if isinstance(name_obj, dict) else str(name_obj).lower()
+                if any(w in label for w in ["open", "geöffnet", "offen", "betrieb"]):
+                    return True
+                if any(w in label for w in ["closed", "geschlossen", "vorbereitung"]):
+                    return False
+    return status_code == 2
 
 def get_gemsstock_lifts():
-    id_map = [
+    target_lifts = [
         (262, "Gemsstock-Bahn"),
         (261, "Gurschen-Bahn"),
         (263, "Gurschen-Flyer"),
@@ -119,46 +115,22 @@ def get_gemsstock_lifts():
     try:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         data = requests.get(SIS_FEED_URL, headers=headers, timeout=10).json()
+        status_types = data.get("statusTypes", []) if isinstance(data, dict) else []
+        
         found = {}
         _collect_items(data, found)
 
-        # Match by lift name if IDs are ordered differently in SIS Control
-        name_to_status = {}
-        for item in found.values():
-            label = str(item.get("name") or item.get("title") or item.get("label") or "").lower()
-            st = _parse_status(item)
-            if "gemsstock" in label:
-                name_to_status["Gemsstock-Bahn"] = st
-            elif "flyer" in label:
-                name_to_status["Gurschen-Flyer"] = st
-            elif "gurschen" in label:
-                name_to_status["Gurschen-Bahn"] = st
-            elif "lutersee" in label:
-                name_to_status["Lutersee-Lift"] = st
-
         result = []
-        for lift_id, display_name in id_map:
-            if display_name in name_to_status:
-                status = name_to_status[display_name]
-            else:
-                status = _parse_status(found.get(lift_id))
-            result.append({"name": display_name, "status": status})
+        for lift_id, display_name in target_lifts:
+            item = found.get(lift_id, {})
+            is_open = _is_status_open(item.get("status"), status_types)
+            result.append({
+                "name": display_name,
+                "status": "Open" if is_open else "Closed"
+            })
         return result
     except Exception:
-        return [{"name": name, "status": "Offline"} for _, name in id_map]
-
-@app.route("/debug")
-def debug_scrape():
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    r = requests.get(SIS_FEED_URL, headers=headers, timeout=10)
-    data = r.json()
-    found = {}
-    _collect_items(data, found)
-    return jsonify({
-        "status_code": r.status_code,
-        "top_level_keys": list(data.keys()) if isinstance(data, dict) else type(data).__name__,
-        "gemsstock_lift_objects": found
-    })
+        return [{"name": name, "status": "Offline"} for _, name in target_lifts]
 
 @app.route("/logo.svg")
 def serve_logo():
