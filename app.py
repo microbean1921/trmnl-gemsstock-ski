@@ -83,74 +83,34 @@ def get_mountain_weather():
         return {"base_temp": "--", "peak_temp": "--", "condition": "Unknown", "snow_depth_cm": "--", "new_snow_cm": "0", "forecast": []}
 
 def get_gemsstock_lifts():
-    url = "https://www.andermatt-sedrun-disentis.ch/de/stories/betriebszeiten"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    
-    target_lifts = [
-        ("Gemsstock-Bahn", r"gemsstock[- ]?bahn"),
-        ("Gurschen-Bahn", r"gurschen[- ]?bahn"),
-        ("Gurschen-Flyer", r"gurschen[- ]?flyer"),
-        ("Lutersee-Lift", r"lutersee([- ]?lift)?")
-    ]
-    
-    open_tokens = [
-        "geöffnet", "in betrieb", "offen", '"open"', "'open'",
-        '"isopen":true', '"status":"open"', '"state":1', '"status":1', "status-open"
-    ]
-    closed_tokens = [
-        "geschlossen", "nicht in betrieb", '"closed"', "'closed'",
-        '"isopen":false', '"status":"closed"', '"state":0', '"status":0', "status-closed"
-    ]
-    
-    lifts_status = []
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        html = r.text
-        
-        for display_name, pattern in target_lifts:
-            status = "Closed"
-            for match in re.finditer(pattern, html, re.IGNORECASE):
-                snippet = html[max(0, match.start() - 150):min(len(html), match.end() + 400)].lower()
-                is_closed = any(tok in snippet for tok in closed_tokens)
-                is_open = any(tok in snippet for tok in open_tokens)
-                if is_open and not is_closed:
-                    status = "Open"
-                    break
-            lifts_status.append({"name": display_name, "status": status})
-    except Exception:
-        for display_name, _ in target_lifts:
-            lifts_status.append({"name": display_name, "status": "Offline"})
-            
-    return lifts_status
+    target_lifts = ["Gemsstock-Bahn", "Gurschen-Bahn", "Gurschen-Flyer", "Lutersee-Lift"]
+    return [{"name": lift, "status": "Closed"} for lift in target_lifts]
 
 @app.route("/debug")
 def debug_scrape():
+    base = "https://prodmediacenter.blob.core.windows.net/a005/ledwall/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    out = {}
+    r = requests.get(base + "areaview.html", headers=headers, timeout=10)
+    js_files = sorted(list(set(re.findall(r'src=["\']([^"\']+\.js)["\']', r.text, re.IGNORECASE))))
 
-    try:
-        r1 = requests.get("https://www.andermatt-sedrun-disentis.ch/de/stories/betriebszeiten", headers=headers, timeout=10)
-        html_lower = r1.text.lower()
-        samples = {}
-        for term in ["gurschen", "gemsstock-bahn", "gemsstockbahn", "lutersee", "siscontrol"]:
-            idx = html_lower.find(term)
-            if idx != -1:
-                samples[term] = r1.text[max(0, idx - 200):idx + 500]
-        out["betriebszeiten_status"] = r1.status_code
-        out["betriebszeiten_found"] = list(samples.keys())
-        out["betriebszeiten_samples"] = samples
-    except Exception as e:
-        out["betriebszeiten_error"] = str(e)
+    found_urls = []
+    json_refs = []
+    for js in js_files:
+        try:
+            jr = requests.get(base + js, headers=headers, timeout=10)
+            for m in re.findall(r'https?://[^"\'\s\)\]]+', jr.text):
+                if not any(skip in m for skip in ["w3.org", "reactjs.org", "fb.me", "github.com", "mozilla.org"]):
+                    found_urls.append(m)
+            for m in re.findall(r'["\']([^"\'\s]+\.json[^"\'\s]*)["\']', jr.text):
+                json_refs.append(m)
+        except Exception as e:
+            found_urls.append(f"ERROR {js}: {e}")
 
-    try:
-        r2 = requests.get("https://prodmediacenter.blob.core.windows.net/a005/ledwall/areaview.html", headers=headers, timeout=10)
-        src_urls = re.findall(r'src=["\']([^"\']+)["\']', r2.text, re.IGNORECASE)
-        out["areaview_raw_html"] = r2.text[:1500]
-        out["areaview_src_urls"] = src_urls
-    except Exception as e:
-        out["areaview_error"] = str(e)
-
-    return jsonify(out)
+    return jsonify({
+        "js_files": js_files,
+        "found_urls": sorted(list(set(found_urls))),
+        "json_refs": sorted(list(set(json_refs)))
+    })
 
 @app.route("/logo.svg")
 def serve_logo():
