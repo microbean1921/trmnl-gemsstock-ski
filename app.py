@@ -115,12 +115,22 @@ def debug_scrape():
     url = "https://live.andermatt-sedrun-disentis.ch/"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     r = requests.get(url, headers=headers, timeout=10)
-    idx = r.text.lower().find("gemsstock")
-    sample = r.text[max(0, idx - 200):idx + 1200] if idx != -1 else r.text[:1500]
+    html_lower = r.text.lower()
+
+    samples = {}
+    for term in ["gurschen", "lutersee", "gemsstock-bahn", "gemsstockbahn"]:
+        idx = html_lower.find(term)
+        if idx != -1:
+            samples[term] = r.text[max(0, idx - 250):idx + 600]
+
+    meteo_url = f"https://api.open-meteo.com/v1/forecast?latitude={LAT}&longitude={LON}¤t=temperature_2m&timezone=Europe/Zurich"
+    m_res = requests.get(meteo_url, timeout=10)
+
     return jsonify({
-        "status_code": r.status_code,
-        "found_gemsstock": idx != -1,
-        "html_sample": sample
+        "lift_samples_found": list(samples.keys()),
+        "samples": samples,
+        "open_meteo_status": m_res.status_code,
+        "open_meteo_raw": m_res.json()
     })
 
 @app.route("/logo.svg")
